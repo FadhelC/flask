@@ -15,7 +15,9 @@ from __future__ import absolute_import
 
 import os
 import sys
+import types
 from functools import partial
+from ssl import SSLContext
 
 import click
 import pytest
@@ -24,8 +26,8 @@ from click.testing import CliRunner
 
 from flask import Flask, current_app
 from flask.cli import (
-    AppGroup, FlaskGroup, NoAppException, ScriptInfo, dotenv,
-    find_best_app, get_version, load_dotenv, locate_app, prepare_import,
+    AppGroup, FlaskGroup, NoAppException, ScriptInfo, dotenv, find_best_app,
+    get_version, load_dotenv, locate_app, prepare_import, run_command,
     with_appcontext
 )
 
@@ -464,3 +466,57 @@ def test_dotenv_optional(monkeypatch):
     monkeypatch.chdir(test_path)
     load_dotenv()
     assert 'FOO' not in os.environ
+
+
+def test_run_cert_path():
+    # no key
+    with pytest.raises(click.BadParameter):
+        run_command.make_context('run', ['--cert', __file__])
+
+    # no cert
+    with pytest.raises(click.BadParameter):
+        run_command.make_context('run', ['--key', __file__])
+
+    ctx = run_command.make_context(
+        'run', ['--cert', __file__, '--key', __file__])
+    assert ctx.params['cert'] == (__file__, __file__)
+
+
+def test_run_cert_adhoc(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'OpenSSL', None)
+
+    # pyOpenSSL not installed
+    with pytest.raises(click.BadParameter):
+        run_command.make_context('run', ['--cert', 'adhoc'])
+
+    # pyOpenSSL installed
+    monkeypatch.setitem(sys.modules, 'OpenSSL', types.ModuleType('OpenSSL'))
+    ctx = run_command.make_context('run', ['--cert', 'adhoc'])
+    assert ctx.params['cert'] == 'adhoc'
+
+    # no key with adhoc
+    with pytest.raises(click.BadParameter):
+        run_command.make_context('run', ['--cert', 'adhoc', '--key', __file__])
+
+
+def test_run_cert_import(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'not_here', None)
+
+    # ImportError
+    with pytest.raises(click.BadParameter):
+        run_command.make_context('run', ['--cert', 'not_here'])
+
+    # not an SSLContext
+    with pytest.raises(click.BadParameter):
+        run_command.make_context('run', ['--cert', 'flask'])
+
+    # SSLContext
+    ssl_context = SSLContext()
+    monkeypatch.setitem(sys.modules, 'ssl_context', ssl_context)
+    ctx = run_command.make_context('run', ['--cert', 'ssl_context'])
+    assert ctx.params['cert'] is ssl_context
+
+    # no --key with SSLContext
+    with pytest.raises(click.BadParameter):
+        run_command.make_context(
+            'run', ['--cert', 'ssl_context', '--key', __file__])
